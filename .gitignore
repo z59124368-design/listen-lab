@@ -1,0 +1,19 @@
+# Python virtual environment & caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Downloaded Whisper models (>100MB, auto-downloaded on first run)
+models/
+
+# User-uploaded MP3/PDF listening projects
+data/
+
+# OS & editor files
+.DS_Store
+*.log
+.vscode/
+.idea/

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ListenSync · 听力歌词同步精听器</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="theme-dark">
+  <div class="app-shell">
+    <!-- Left Library Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-logo" aria-hidden="true">♪</div>
+          <div>
+            <div class="brand-name">ListenSync</div>
+            <div class="brand-sub">听力歌词同步精听</div>
+          </div>
+        </div>
+        <button class="icon-btn" id="themeToggleBtn" title="切换深浅色主题">🌙</button>
+      </div>
+
+      <div class="sidebar-actions">
+        <button class="btn-primary full-width" id="newProjectBtn">
+          <span>＋</span> 上传新听力 (MP3 + PDF)
+        </button>
+      </div>
+
+      <div class="sidebar-section-title">我的听力库</div>
+      <div class="project-list" id="projectList">
+        <div class="empty-library">暂无听力项目，点击上方上传</div>
+      </div>
+
+      <div class="shortcuts-card">
+        <div class="shortcuts-title">快捷键</div>
+        <div class="shortcut-row"><span>播放 / 暂停</span><kbd>Space</kbd></div>
+        <div class="shortcut-row"><span>上一句 / 下一句</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
+        <div class="shortcut-row"><span>重听当前句</span><kbd>R</kbd></div>
+        <div class="shortcut-row"><span>连续 / 单句 / 循环</span><span><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span></div>
+        <div class="shortcut-row"><span>盲听遮罩</span><kbd>B</kbd></div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-area">
+      <!-- Top Bar -->
+      <header class="topbar" id="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn mobile-only" id="toggleSidebarBtn" title="显示/隐藏侧边栏">☰</button>
+          <div class="track-meta" id="trackMeta">
+            <h1 class="track-title" id="trackTitle">欢迎使用 ListenSync</h1>
+            <div class="track-sub" id="trackSub">上传 MP3 音频与 PDF 原文，像看歌词一样听听力、逐句精听</div>
+          </div>
+        </div>
+
+        <div class="topbar-tools hidden" id="playerTools">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="searchInput" placeholder="搜索原文句子..." />
+          </div>
+          <button class="tool-btn" id="blindModeBtn" title="盲听模式 (快捷键 B)">
+            <span>👁</span> 盲听遮罩
+          </button>
+          <button class="tool-btn active" id="autoScrollBtn" title="播放时自动滚动居中">
+            <span>⇅</span> 自动跟随
+          </button>
+          <button class="tool-btn" id="realignBtn" title="更换模型重新对齐时间轴">
+            <span>🔄</span> 重新对齐
+          </button>
+          <div class="dropdown">
+            <button class="tool-btn" id="exportMenuBtn">
+              <span>⬇</span> 导出字幕
+            </button>
+            <div class="dropdown-menu hidden" id="exportDropdown">
+              <button data-export="lrc">导出歌词 (.lrc)</button>
+              <button data-export="srt">导出字幕 (.srt)</button>
+              <button data-export="json">导出时间轴 (.json)</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- View 1: Upload Studio -->
+      <section class="upload-view" id="uploadView">
+        <div class="upload-card">
+          <div class="upload-hero">
+            <h2>上传听力音频与原文，自动生成逐句同步歌词</h2>
+            <p>支持点击任意句子跳转播放、单句精听自动暂停、单句循环跟读以及时间戳微调。</p>
+          </div>
+
+          <form id="uploadForm" class="upload-form">
+            <div class="drop-grid">
+              <!-- Audio Dropzone -->
+              <label class="dropzone" id="audioDropzone" for="audioFileInput">
+                <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.opus,.webm,audio/*" hidden />
+                <div class="drop-icon">🎵</div>
+                <div class="drop-title">上传听力音频</div>
+                <div class="drop-hint" id="audioDropHint">拖拽或点击选择 MP3 / M4A / WAV 文件</div>
+                <div class="file-pill hidden" id="audioFilePill"></div>
+              </label>
+
+              <!-- PDF / Text Dropzone -->
+              <div class="transcript-panel">
+                <div class="transcript-tabs">
+                  <button type="button" class="tab-btn active" data-tab="pdf">📄 上传 PDF 原文</button>
+                  <button type="button" class="tab-btn" data-tab="text">📝 直接粘贴原文</button>
+                </div>
+
+                <label class="dropzone compact" id="pdfDropzone" for="pdfFileInput">
+                  <input type="file" id="pdfFileInput" accept=".pdf,.txt,application/pdf,text/plain" hidden />
+                  <div class="drop-icon">📄</div>
+                  <div class="drop-title">上传听力原文 (PDF / TXT)</div>
+                  <div class="drop-hint" id="pdfDropHint">支持单栏/双栏 PDF，自动去除页眉页码并识别说话人</div>
+                  <div class="file-pill hidden" id="pdfFilePill"></div>
+                </label>
+
+                <div class="text-paste-box hidden" id="textPasteBox">
+                  <textarea id="transcriptTextarea" placeholder="在这里粘贴英文或中文听力原文...&#10;&#10;例如：&#10;MAN: Good morning. Can I help you?&#10;WOMAN: Yes, I'd like to book a sports hall for Saturday."></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="options-grid">
+              <div class="field">
+                <label for="titleInput">听力名称</label>
+                <input type="text" id="titleInput" placeholder="默认使用音频文件名" />
+              </div>
+              <div class="field">
+                <label for="languageSelect">听力语言</label>
+                <select id="languageSelect">
+                  <option value="auto" selected>自动识别 (推荐)</option>
+                  <option value="en">英语 (English)</option>
+                  <option value="zh">中文 (Chinese)</option>
+                  <option value="ja">日语 (Japanese)</option>
+                  <option value="ko">韩语 (Korean)</option>
+                  <option value="fr">法语 (French)</option>
+                  <option value="de">德语 (German)</option>
+                  <option value="es">西班牙语 (Spanish)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="modelSelect">对齐模型精度</label>
+                <select id="modelSelect">
+                  <option value="base" selected>均衡快速 (base · 推荐)</option>
+                  <option value="tiny">极速轻量 (tiny)</option>
+                  <option value="small">高精度 (small · 复杂口音)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-error hidden" id="uploadError"></div>
+
+            <div class="submit-row">
+              <button type="submit" class="btn-primary large" id="submitUploadBtn">
+                开始智能同步对齐
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- View 2: Processing Progress -->
+      <section class="processing-view hidden" id="processingView">
+        <div class="processing-card">
+          <div class="spinner-ring"></div>
+          <h2 id="processingTitle">正在处理听力对齐...</h2>
+          <p id="processingMessage">正在解析文件...</p>
+          <div class="progress-track">
+            <div class="progress-fill" id="processingFill" style="width: 5%"></div>
+          </div>
+          <div class="progress-pct" id="processingPct">5%</div>
+          <div class="processing-error hidden" id="processingErrorBox">
+            <p id="processingErrorText"></p>
+            <button class="btn-secondary" id="retryRealignBtn">重试对齐</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- View 3: Lyrics Sync Player -->
+      <section class="lyrics-stage hidden" id="lyricsStage">
+        <div class="lyrics-scroll" id="lyricsScroll">
+          <div class="lyrics-list" id="lyricsList"></div>
+        </div>
+
+        <button class="jump-active-btn hidden" id="jumpActiveBtn">
+          回到当前播放句 ↓
+        </button>
+      </section>
+
+      <!-- Bottom Sticky Audio Dock -->
+      <footer class="player-dock hidden" id="playerDock">
+        <div class="waveform-wrap" id="waveformWrap" title="点击或拖动波形跳转到任意时间">
+          <canvas id="waveformCanvas"></canvas>
+          <div class="waveform-hint" id="waveformHoverTime">00:00</div>
+        </div>
+
+        <div class="controls-row">
+          <div class="controls-left">
+            <div class="time-readout">
+              <span id="currentTimeLabel">00:00.0</span>
+              <span class="time-sep">/</span>
+              <span id="totalTimeLabel">00:00.0</span>
+            </div>
+            <div class="sentence-counter" id="sentenceCounter">第 0 / 0 句</div>
+            <div class="pause-cue hidden" id="pauseCue">已到句末 · 按 Space 听下一句 / R 重听</div>
+          </div>
+
+          <div class="controls-center">
+            <button class="ctrl-btn" id="prevSentenceBtn" title="上一句 (←)">⏮</button>
+            <button class="ctrl-btn" id="replaySentenceBtn" title="重听当前句 (R)">↺</button>
+            <button class="play-btn" id="playPauseBtn" title="播放 / 暂停 (Space)">▶</button>
+            <button class="ctrl-btn" id="nextSentenceBtn" title="下一句 (→)">⏭</button>
+          </div>
+
+          <div class="controls-right">
+            <div class="mode-switch" role="group" aria-label="听写模式">
+              <button class="mode-btn active" data-mode="continuous" title="连续播放，像听歌一样看歌词 (快捷键 1)">连续歌词</button>
+              <button class="mode-btn" data-mode="single" title="每听完一句自动暂停，方便逐句精听 (快捷键 2)">单句停顿</button>
+              <button class="mode-btn" data-mode="loop" title="无限单句循环，适合跟读模仿 (快捷键 3)">单句循环</button>
+            </div>
+
+            <select class="compact-select hidden" id="loopGapSelect" title="单句循环间隔时间">
+              <option value="0">间隔 0s</option>
+              <option value="500" selected>间隔 0.5s</option>
+              <option value="1200">间隔 1.2s</option>
+              <option value="2500">间隔 2.5s</option>
+            </select>
+
+            <select class="compact-select" id="speedSelect" title="播放倍速">
+              <option value="0.6">0.6x</option>
+              <option value="0.75">0.75x</option>
+              <option value="0.85">0.85x</option>
+              <option value="1" selected>1.0x</option>
+              <option value="1.15">1.15x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+            </select>
+
+            <div class="volume-box" title="音量">
+              <span>🔊</span>
+              <input type="range" id="volumeRange" min="0" max="1" step="0.02" value="1" />
+            </div>
+          </div>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Realign Modal -->
+  <div class="modal-backdrop hidden" id="realignModal">
+    <div class="modal-card">
+      <h3>重新对齐时间轴</h3>
+      <p>如果对部分句子的时间边界不满意，可以更换更高精度的模型或指定语言重新对齐。</p>
+      <div class="field">
+        <label for="realignLanguage">听力语言</label>
+        <select id="realignLanguage">
+          <option value="auto">自动识别</option>
+          <option value="en">英语 (English)</option>
+          <option value="zh">中文 (Chinese)</option>
+          <option value="ja">日语 (Japanese)</option>
+          <option value="ko">韩语 (Korean)</option>
+          <option value="fr">法语 (French)</option>
+          <option value="de">德语 (German)</option>
+          <option value="es">西班牙语 (Spanish)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="realignModel">模型精度</label>
+        <select id="realignModel">
+          <option value="tiny">极速轻量 (tiny)</option>
+          <option value="base">均衡快速 (base)</option>
+          <option value="small">高精度 (small · 首次需下载约460MB)</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="cancelRealignBtn">取消</button>
+        <button class="btn-primary" id="confirmRealignBtn">开始重新对齐</button>
+      </div>
+    </div>
+  </div>
+
+  <audio id="audioPlayer" preload="auto"></audio>
+  <script src="/static/app.js"></script>
+</body>
+</html>
