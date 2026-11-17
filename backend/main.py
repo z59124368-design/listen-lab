@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 import mimetypes
 import os
@@ -10,7 +11,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 from urllib.parse import quote
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -39,7 +40,13 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 
 ALLOWED_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus", ".webm", ".mp4"}
 
-app = FastAPI(title="ListenSync API", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    ensure_dirs()
+    yield
+
+
+app = FastAPI(title="ListenSync API", version="1.0.0", lifespan=_lifespan)
 
 # Track running alignment threads to avoid duplicate concurrent jobs per project
 _ACTIVE_JOBS: set[str] = set()
@@ -139,9 +146,12 @@ def _run_alignment_job(project_id: str, audio_path: str, model_size: str, langua
             _ACTIVE_JOBS.discard(project_id)
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    ensure_dirs()
+def _reindex_and_save(meta: dict[str, Any], new_list: list[dict[str, Any]]) -> dict[str, Any]:
+    for new_id, item in enumerate(new_list):
+        item["id"] = new_id
+    meta["sentences"] = new_list
+    save_project(meta)
+    return {"sentences": new_list}
 
 
 @app.get("/")
@@ -356,11 +366,7 @@ def api_split_sentence(project_id: str, sentence_id: int, body: SentenceSplitReq
     second["end"] = max(mid_t + 0.15, s_end)
 
     new_list = sentences[:idx] + [first, second] + sentences[idx + 1 :]
-    for new_id, item in enumerate(new_list):
-        item["id"] = new_id
-    meta["sentences"] = new_list
-    save_project(meta)
-    return {"sentences": new_list}
+    return _reindex_and_save(meta, new_list)
 
 
 @app.post("/api/projects/{project_id}/sentences/{sentence_id}/merge-next")
@@ -384,11 +390,7 @@ def api_merge_next_sentence(project_id: str, sentence_id: int) -> dict[str, Any]
     cur["confidence"] = round(0.5 * (float(cur.get("confidence", 0.5)) + float(nxt.get("confidence", 0.5))), 2)
 
     new_list = sentences[:next_idx] + sentences[next_idx + 1 :]
-    for new_id, item in enumerate(new_list):
-        item["id"] = new_id
-    meta["sentences"] = new_list
-    save_project(meta)
-    return {"sentences": new_list}
+    return _reindex_and_save(meta, new_list)
 
 
 def _content_disposition(filename: str) -> str:
@@ -404,26 +406,19 @@ def api_export(project_id: str, format: str = Query("lrc")) -> PlainTextResponse
         raise HTTPException(status_code=404, detail="未找到项目")
     title = meta.get("title", "listening").replace('"', "").strip() or "listening"
     fmt = format.lower()
-    if fmt == "lrc":
-        content = export_lrc(meta)
-        return PlainTextResponse(
-            content,
-            headers={"Content-Disposition": _content_disposition(f"{title}.lrc")},
-        )
-    if fmt == "srt":
-        content = export_srt(meta)
-        return PlainTextResponse(
-            content,
-            headers={"Content-Disposition": _content_disposition(f"{title}.srt")},
-        )
-    if fmt == "json":
-        content = json.dumps(meta.get("sentences", []), ensure_ascii=False, indent=2)
-        return PlainTextResponse(
-            content,
-            media_type="application/json",
-            headers={"Content-Disposition": _content_disposition(f"{title}.json")},
-        )
-    raise HTTPException(status_code=400, detail="不支持的导出格式，请选择 lrc / srt / json")
+    exporters = {
+        "lrc": (export_lrc, "text/plain"),
+        "srt": (export_srt, "text/plain"),
+        "json": (lambda m: json.dumps(m.get("sentences", []), ensure_ascii=False, indent=2), "application/json"),
+    }
+    if fmt not in exporters:
+        raise HTTPException(status_code=400, detail="不支持的导出格式，请选择 lrc / srt / json")
+    builder, media_type = exporters[fmt]
+    return PlainTextResponse(
+        builder(meta),
+        media_type=media_type,
+        headers={"Content-Disposition": _content_disposition(f"{title}.{fmt}")},
+    )
 
 
 @app.delete("/api/projects/{project_id}")

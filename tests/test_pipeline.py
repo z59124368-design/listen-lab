@@ -230,7 +230,9 @@ def test_end_to_end_server_and_alignment() -> None:
         port = _free_port()
         proc = subprocess.Popen(
             [
-                str(ROOT / ".venv" / "bin" / "uvicorn"),
+                sys.executable,
+                "-m",
+                "uvicorn",
                 "backend.main:app",
                 "--host",
                 "127.0.0.1",

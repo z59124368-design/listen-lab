@@ -17,7 +17,7 @@ import numpy as np
 
 _MODEL_LOCK = threading.Lock()
 _MODEL_CACHE: dict[str, Any] = {}
-MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+MODELS_DIR = Path(os.environ.get("LISTEN_SYNC_MODELS_DIR") or (Path(__file__).resolve().parent.parent / "models"))
 
 _ONES = {
     0: "zero", 1: "one", 2: "two", 3: "three", 4: "four",
@@ -728,6 +728,110 @@ def _snap_boundaries_with_rms(
             spoken[idx + 1]["end"] = max(spoken[idx + 1]["start"] + 0.20, spoken[idx + 1]["end"])
 
 
+def _assign_anchored_timestamps(
+    items: list[dict[str, Any]],
+    spoken_indices: list[int],
+    sent_token_ranges: dict[int, tuple[int, int]],
+    mapping: list[Optional[int]],
+    asr_tokens: list[TimedToken],
+    duration: float,
+) -> list[int]:
+    """Assign start/end timestamps and confidence for sentences with matched ASR words."""
+    anchored_idx: list[int] = []
+    for idx in spoken_indices:
+        t0, t1 = sent_token_ranges[idx]
+        total_toks = max(1, t1 - t0)
+        matched_asr = [mapping[p] for p in range(t0, t1) if mapping[p] is not None]
+        if not matched_asr:
+            items[idx]["confidence"] = 0.0
+            continue
+
+        first_a = matched_asr[0]
+        last_a = matched_asr[-1]
+        first_matched_p = next(p for p in range(t0, t1) if mapping[p] is not None)
+        last_matched_p = next(p for p in range(t1 - 1, t0 - 1, -1) if mapping[p] is not None)
+        missing_head = first_matched_p - t0
+        missing_tail = (t1 - 1) - last_matched_p
+
+        s_time = asr_tokens[first_a].start
+        if missing_head > 0 and first_a > 0:
+            prev_tok_end = asr_tokens[first_a - 1].end
+            if s_time - prev_tok_end < 0.8:
+                s_time = max(prev_tok_end, s_time - 0.18 * min(2, missing_head))
+
+        e_time = asr_tokens[last_a].end
+        if missing_tail > 0 and last_a + 1 < len(asr_tokens):
+            next_tok_start = asr_tokens[last_a + 1].start
+            if next_tok_start - e_time < 0.8:
+                e_time = min(next_tok_start, e_time + 0.18 * min(2, missing_tail))
+
+        items[idx]["start"] = round(max(0.0, s_time), 3)
+        items[idx]["end"] = round(min(duration, max(s_time + 0.25, e_time)), 3)
+        items[idx]["confidence"] = round(min(1.0, len(matched_asr) / total_toks), 2)
+        anchored_idx.append(idx)
+    return anchored_idx
+
+
+def _interpolate_unanchored_sentences(
+    items: list[dict[str, Any]],
+    spoken_indices: list[int],
+    anchored_idx: list[int],
+    duration: float,
+) -> None:
+    """Fill timestamps for unanchored sentences by proportional interpolation between anchors."""
+    if not spoken_indices:
+        return
+    if not anchored_idx:
+        weights = [max(4, len(items[i]["text"])) for i in spoken_indices]
+        total_w = sum(weights)
+        cur_t = 0.0
+        for idx, w in zip(spoken_indices, weights):
+            span = duration * (w / total_w)
+            items[idx]["start"] = round(cur_t, 3)
+            cur_t += span
+            items[idx]["end"] = round(min(duration, cur_t), 3)
+            items[idx]["confidence"] = 0.1
+        return
+
+    pos = 0
+    while pos < len(spoken_indices):
+        idx = spoken_indices[pos]
+        if items[idx]["confidence"] > 0:
+            pos += 1
+            continue
+        run_start = pos
+        while pos < len(spoken_indices) and items[spoken_indices[pos]]["confidence"] == 0:
+            pos += 1
+        run_end = pos
+
+        t_left = 0.0 if run_start == 0 else items[spoken_indices[run_start - 1]]["end"]
+        t_right = duration if run_end >= len(spoken_indices) else items[spoken_indices[run_end]]["start"]
+        if t_right <= t_left:
+            t_right = min(duration, t_left + 0.5 * (run_end - run_start))
+
+        weights = [max(4, len(items[spoken_indices[k]]["text"])) for k in range(run_start, run_end)]
+        total_w = sum(weights)
+        cur_t = t_left
+        for k, w in zip(range(run_start, run_end), weights):
+            s_idx = spoken_indices[k]
+            span = (t_right - t_left) * (w / total_w)
+            items[s_idx]["start"] = round(cur_t, 3)
+            cur_t += span
+            items[s_idx]["end"] = round(min(duration, max(items[s_idx]["start"] + 0.2, cur_t)), 3)
+            items[s_idx]["confidence"] = 0.15
+
+
+def _sync_header_timestamps(items: list[dict[str, Any]], duration: float) -> None:
+    """Point each section header to the start timestamp of its first following sentence."""
+    next_start = duration
+    for idx in range(len(items) - 1, -1, -1):
+        if items[idx].get("kind") == "header":
+            items[idx]["start"] = round(next_start, 3)
+            items[idx]["end"] = round(next_start, 3)
+        else:
+            next_start = items[idx]["start"]
+
+
 def align_audio_and_transcript(
     audio_path: str,
     work_dir: str,
@@ -760,7 +864,6 @@ def align_audio_and_transcript(
     spoken_indices = [idx for idx, it in enumerate(items) if it.get("kind") != "header"]
     p_tokens: list[str] = []
     sent_token_ranges: dict[int, tuple[int, int]] = {}
-
     for idx in spoken_indices:
         toks = normalize_text_to_tokens(items[idx]["text"])
         start_tok = len(p_tokens)
@@ -768,97 +871,17 @@ def align_audio_and_transcript(
         sent_token_ranges[idx] = (start_tok, len(p_tokens))
 
     mapping = align_tokens(p_tokens, asr_tokens)
-
-    # First pass: compute direct timestamps for anchored sentences
-    anchored_idx: list[int] = []
-    for idx in spoken_indices:
-        t0, t1 = sent_token_ranges[idx]
-        total_toks = max(1, t1 - t0)
-        matched_asr = [mapping[p] for p in range(t0, t1) if mapping[p] is not None]
-        if matched_asr:
-            first_a = matched_asr[0]
-            last_a = matched_asr[-1]
-            # Look at unmatched head/tail words inside sentence
-            first_matched_p = next(p for p in range(t0, t1) if mapping[p] is not None)
-            last_matched_p = next(p for p in range(t1 - 1, t0 - 1, -1) if mapping[p] is not None)
-            missing_head = first_matched_p - t0
-            missing_tail = (t1 - 1) - last_matched_p
-
-            s_time = asr_tokens[first_a].start
-            if missing_head > 0 and first_a > 0:
-                prev_tok_end = asr_tokens[first_a - 1].end
-                if s_time - prev_tok_end < 0.8:
-                    s_time = max(prev_tok_end, s_time - 0.18 * min(2, missing_head))
-
-            e_time = asr_tokens[last_a].end
-            if missing_tail > 0 and last_a + 1 < len(asr_tokens):
-                next_tok_start = asr_tokens[last_a + 1].start
-                if next_tok_start - e_time < 0.8:
-                    e_time = min(next_tok_start, e_time + 0.18 * min(2, missing_tail))
-
-            items[idx]["start"] = round(max(0.0, s_time), 3)
-            items[idx]["end"] = round(min(duration, max(s_time + 0.25, e_time)), 3)
-            items[idx]["confidence"] = round(min(1.0, len(matched_asr) / total_toks), 2)
-            anchored_idx.append(idx)
-        else:
-            items[idx]["confidence"] = 0.0
-
-    # Second pass: interpolate any unanchored spoken sentences cleanly between anchors
-    if not anchored_idx and spoken_indices:
-        # Fallback proportional split over full duration if ASR returned nothing
-        weights = [max(4, len(items[i]["text"])) for i in spoken_indices]
-        total_w = sum(weights)
-        cur_t = 0.0
-        for idx, w in zip(spoken_indices, weights):
-            span = duration * (w / total_w)
-            items[idx]["start"] = round(cur_t, 3)
-            cur_t += span
-            items[idx]["end"] = round(min(duration, cur_t), 3)
-            items[idx]["confidence"] = 0.1
-    else:
-        # Walk spoken_indices to fill contiguous unanchored runs
-        pos = 0
-        while pos < len(spoken_indices):
-            idx = spoken_indices[pos]
-            if items[idx]["confidence"] > 0:
-                pos += 1
-                continue
-            run_start = pos
-            while pos < len(spoken_indices) and items[spoken_indices[pos]]["confidence"] == 0:
-                pos += 1
-            run_end = pos  # exclusive
-
-            t_left = 0.0 if run_start == 0 else items[spoken_indices[run_start - 1]]["end"]
-            t_right = duration if run_end >= len(spoken_indices) else items[spoken_indices[run_end]]["start"]
-            if t_right <= t_left:
-                t_right = min(duration, t_left + 0.5 * (run_end - run_start))
-
-            weights = [max(4, len(items[spoken_indices[k]]["text"])) for k in range(run_start, run_end)]
-            total_w = sum(weights)
-            cur_t = t_left
-            for k, w in zip(range(run_start, run_end), weights):
-                s_idx = spoken_indices[k]
-                span = (t_right - t_left) * (w / total_w)
-                items[s_idx]["start"] = round(cur_t, 3)
-                cur_t += span
-                items[s_idx]["end"] = round(min(duration, max(items[s_idx]["start"] + 0.2, cur_t)), 3)
-                items[s_idx]["confidence"] = 0.15
-
-    # Ensure headers point to the start of the first sentence following them
-    next_start = duration
-    for idx in range(len(items) - 1, -1, -1):
-        if items[idx].get("kind") == "header":
-            items[idx]["start"] = round(next_start, 3)
-            items[idx]["end"] = round(next_start, 3)
-        else:
-            next_start = items[idx]["start"]
+    anchored_idx = _assign_anchored_timestamps(
+        items, spoken_indices, sent_token_ranges, mapping, asr_tokens, duration
+    )
+    _interpolate_unanchored_sentences(items, spoken_indices, anchored_idx, duration)
+    _sync_header_timestamps(items, duration)
 
     if on_progress:
         on_progress(94, "正在根据音频静音能量微调句首句尾边界...")
 
     _snap_boundaries_with_rms(items, rms, duration)
 
-    # Remove temporary wav to keep project disk usage lean
     try:
         os.remove(wav_path)
     except OSError:

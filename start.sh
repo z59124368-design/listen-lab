@@ -25,9 +25,17 @@ pick_python() {
   return 1
 }
 
-# Remove broken .venv (e.g., copied from another Mac with invalid symlinks)
+open_browser() {
+  if command -v open >/dev/null 2>&1; then
+    open "$1" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$1" >/dev/null 2>&1 || true
+  fi
+}
+
+# Rebuild .venv if copied from another machine with broken symlinks
 if [ -d ".venv" ] && ! .venv/bin/python -c "import sys" >/dev/null 2>&1; then
-  echo "检测到旧的虚拟环境路径不匹配本机（可能是从另一台电脑复制过来的），正在重建 .venv..."
+  echo "检测到旧的虚拟环境路径不匹配本机，正在重建 .venv..."
   rm -rf .venv
 fi
 
@@ -43,16 +51,17 @@ fi
 
 if ! .venv/bin/python -c "import sys, fastapi, uvicorn, pymupdf, faster_whisper, numpy; assert sys.version_info >= (3, 10) or __import__('eval_type_backport')" >/dev/null 2>&1; then
   echo "正在安装所需依赖（fastapi / pymupdf / faster-whisper）..."
-  .venv/bin/python -m pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple || .venv/bin/python -m pip install --upgrade pip
-  .venv/bin/pip install -i https://pypi.tuna.tsinghua.edu.cn/simple fastapi uvicorn python-multipart pymupdf faster-whisper numpy eval_type_backport \
-    || .venv/bin/pip install fastapi uvicorn python-multipart pymupdf faster-whisper numpy eval_type_backport
+  .venv/bin/python -m pip install --upgrade pip --timeout 15 -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    || .venv/bin/python -m pip install --upgrade pip
+  .venv/bin/pip install --timeout 15 -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt \
+    || .venv/bin/pip install -r requirements.txt
 fi
 
 echo "正在启动 ListenSync 听力歌词同步器: ${URL}"
 (
   for _ in $(seq 1 40); do
     if .venv/bin/python -c "import socket; s=socket.create_connection(('127.0.0.1', ${PORT}), 0.5); s.close()" >/dev/null 2>&1; then
-      open "${URL}" >/dev/null 2>&1 || true
+      open_browser "${URL}"
       exit 0
     fi
     sleep 0.5

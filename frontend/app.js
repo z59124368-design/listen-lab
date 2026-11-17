@@ -138,16 +138,20 @@
       item.querySelector(".project-delete-btn").addEventListener("click", async (e) => {
         e.stopPropagation();
         if (!confirm(`确定删除 "${p.title}" 吗？`)) return;
-        await apiJson(`/api/projects/${p.id}`, { method: "DELETE" });
-        if (state.currentProject?.id === p.id) {
-          audio.pause();
-          audio.src = "";
-          state.currentProject = null;
-          showView("upload");
-          $("trackTitle").textContent = "欢迎使用 ListenSync";
-          $("trackSub").textContent = "上传 MP3 音频与 PDF 原文，像看歌词一样听听力、逐句精听";
+        try {
+          await apiJson(`/api/projects/${p.id}`, { method: "DELETE" });
+          if (state.currentProject?.id === p.id) {
+            audio.pause();
+            audio.src = "";
+            state.currentProject = null;
+            showView("upload");
+            $("trackTitle").textContent = "欢迎使用 ListenSync";
+            $("trackSub").textContent = "上传 MP3 音频与 PDF 原文，像看歌词一样听听力、逐句精听";
+          }
+          await loadProjectList();
+        } catch (err) {
+          alert(err.message || "删除失败");
         }
-        await loadProjectList();
       });
 
       list.appendChild(item);
@@ -202,6 +206,7 @@
     $("processingPct").textContent = `${pct}%`;
 
     const hasErr = proj.status === "error";
+    document.querySelector(".spinner-ring")?.classList.toggle("hidden", hasErr);
     $("processingErrorBox").classList.toggle("hidden", !hasErr);
     if (hasErr) {
       $("processingErrorText").textContent = proj.error || "处理过程中发生未知错误";
@@ -390,8 +395,8 @@
       btn.addEventListener("click", async () => {
         const [field, deltaStr] = btn.dataset.nudge.split(":");
         const nextVal = Math.max(0, Number(s[field]) + parseFloat(deltaStr));
-        await patchSentence(s.id, { [field]: nextVal });
-        playSentenceSolo(s, "once");
+        const updated = await patchSentence(s.id, { [field]: nextVal });
+        playSentenceSolo(updated, "once");
       });
     });
 
@@ -411,32 +416,40 @@
       if (txt) await patchSentence(s.id, { text: txt });
     });
 
+    function applyUpdatedSentences(sentences) {
+      state.currentProject.sentences = sentences;
+      state.spokenSentences = sentences.filter((x) => x.kind !== "header");
+      state.editingSentenceId = null;
+      renderLyrics();
+      drawWaveform();
+    }
+
     box.querySelector('[data-action="split"]').addEventListener("click", async () => {
       const txt = s.text;
       let mid = Math.floor(txt.length / 2);
       const spacePos = txt.indexOf(" ", mid);
       if (spacePos > 1 && spacePos < txt.length - 1) mid = spacePos;
-      const res = await apiJson(`/api/projects/${state.currentProject.id}/sentences/${s.id}/split`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ split_index: mid }),
-      });
-      state.currentProject.sentences = res.sentences;
-      state.spokenSentences = res.sentences.filter((x) => x.kind !== "header");
-      state.editingSentenceId = null;
-      renderLyrics();
-      drawWaveform();
+      try {
+        const res = await apiJson(`/api/projects/${state.currentProject.id}/sentences/${s.id}/split`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ split_index: mid }),
+        });
+        applyUpdatedSentences(res.sentences);
+      } catch (err) {
+        alert(err.message || "拆分句子失败");
+      }
     });
 
     box.querySelector('[data-action="merge"]').addEventListener("click", async () => {
-      const res = await apiJson(`/api/projects/${state.currentProject.id}/sentences/${s.id}/merge-next`, {
-        method: "POST",
-      });
-      state.currentProject.sentences = res.sentences;
-      state.spokenSentences = res.sentences.filter((x) => x.kind !== "header");
-      state.editingSentenceId = null;
-      renderLyrics();
-      drawWaveform();
+      try {
+        const res = await apiJson(`/api/projects/${state.currentProject.id}/sentences/${s.id}/merge-next`, {
+          method: "POST",
+        });
+        applyUpdatedSentences(res.sentences);
+      } catch (err) {
+        alert(err.message || "合并句子失败");
+      }
     });
 
     return box;
@@ -454,6 +467,7 @@
     state.spokenSentences = list.filter((x) => x.kind !== "header");
     renderLyrics();
     drawWaveform();
+    return updated;
   }
 
   // Playback Logic
@@ -938,6 +952,7 @@
       clearLoopTimer();
       state.soloOverride = null;
       state.pausedAtSentenceEnd = false;
+      state.lastSeekMs = performance.now();
       $("pauseCue").classList.add("hidden");
       audio.currentTime = target;
       const s = findSentenceAtTime(target);
@@ -1030,15 +1045,19 @@
       if (!state.currentProject) return;
       const pid = state.currentProject.id;
       $("realignModal").classList.add("hidden");
-      await apiJson(`/api/projects/${pid}/realign`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          language: $("realignLanguage").value,
-          model_size: $("realignModel").value,
-        }),
-      });
-      await openProject(pid);
+      try {
+        await apiJson(`/api/projects/${pid}/realign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            language: $("realignLanguage").value,
+            model_size: $("realignModel").value,
+          }),
+        });
+        await openProject(pid);
+      } catch (err) {
+        alert(err.message || "重新对齐请求失败");
+      }
     });
 
     // Keyboard shortcuts

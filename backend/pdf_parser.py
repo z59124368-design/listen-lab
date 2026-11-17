@@ -6,7 +6,10 @@ import re
 from collections import Counter
 from typing import Any
 
-import pymupdf as fitz
+try:
+    import pymupdf as fitz
+except ImportError:  # pragma: no cover - fallback for older PyMuPDF releases
+    import fitz
 
 
 _PAGE_NUM_RE = re.compile(

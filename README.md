@@ -15,10 +15,12 @@
 
 ## 运行环境要求
 
-- macOS（Apple Silicon 或 Intel；音频解码优先调用系统内置 `afconvert`，并自带 PyAV 回退）
-- Python 3.9 – 3.13（推荐 Python 3.11+；已兼容系统自带 Python 3.9）
+- macOS / Linux / Windows（macOS 优先使用系统内置 `afconvert` 解码，其他平台自动回退至 PyAV）
+- Python 3.9 – 3.13（推荐 Python 3.11+；已兼容 macOS 自带 Python 3.9）
 
 ## 快速启动
+
+### macOS / Linux
 
 ```bash
 git clone <你的仓库地址>
@@ -27,7 +29,19 @@ chmod +x start.sh 启动ListenSync.command
 ./start.sh
 ```
 
-或者直接在 Finder 中双击 `启动ListenSync.command`。首次运行会自动创建 `.venv` 并安装依赖，服务就绪后自动在浏览器打开 `http://127.0.0.1:8765`。
+macOS 也可直接在 Finder 中双击 `启动ListenSync.command`。首次运行会自动创建 `.venv` 并安装依赖，服务就绪后自动在浏览器打开 `http://127.0.0.1:8765`。
+
+### Windows（PowerShell）
+
+```powershell
+git clone <你的仓库地址>
+cd listen-sync
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\uvicorn backend.main:app --host 127.0.0.1 --port 8765
+```
+
+然后在浏览器访问 `http://127.0.0.1:8765`。
 
 > **提示**：首次对齐听力时会自动下载 Whisper `base` 模型（约 140 MB）到 `models/` 目录；若直连 HuggingFace 较慢，程序会自动回退至 `hf-mirror.com`。
 
